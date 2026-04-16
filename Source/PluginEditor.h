@@ -25,5 +25,8 @@ private:
 
     float reelPhase = 0.0f;
 
+    // Hold-to-repeat for +/- step buttons
+    int holdFrames = 0; // counts timer ticks while button held
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TapePluginEditor)
 };
