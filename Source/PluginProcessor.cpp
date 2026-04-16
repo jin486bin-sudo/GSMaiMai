@@ -84,6 +84,26 @@ void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     const float target = *apvts.getRawParameterValue("speed");
     const float mix = *apvts.getRawParameterValue("mix");
 
+    // FAST PATH: true bypass when fully neutral and no accumulated tape delay.
+    // No DSP runs except keeping the audio buffer fresh for instant engagement.
+    const bool fullyNeutral = std::abs(target) < 1e-4f
+                           && std::abs(speedCurrent) < 1e-4f
+                           && shifters[0].currentGap() < 2.0;
+
+    if (fullyNeutral)
+    {
+        for (int n = 0; n < numSamples; ++n)
+            for (int ch = 0; ch < numCh; ++ch)
+                shifters[ch].writeOnly(buffer.getSample(ch, n));
+
+        highpass.reset();
+        lowpass.reset();
+        wowPhase = flutterPhase = 0.0f;
+        for (auto& v : dcX1) v = 0.0f;
+        for (auto& v : dcY1) v = 0.0f;
+        return; // audio passes through unchanged
+    }
+
     // Rate-limited smoothing: small steps feel instant, full jumps glide over 100ms
     const float maxDelta = speedRatePerSecond / sr;
 

@@ -36,70 +36,68 @@ public:
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    // Dual-head crossfading ring-buffer pitch shifter.
-    // Zero latency, no baseline gap → automation aligns perfectly with timeline.
-    // Tape tempo change isn't simulated (physically impossible in a realtime plugin
-    // without adding latency that breaks DAW sync) — only pitch shift + tape color.
-    struct PitchShifter
+    // Varispeed ring buffer: pitch AND tempo couple like real tape.
+    // NO baseline latency reported (setLatencySamples(0)). Read head starts at
+    // write head → zero delay when speed=0. Slowing grows the gap (stretch);
+    // output naturally drifts behind timeline — that IS the tape effect.
+    // STOP button resyncs.
+    struct Varispeed
     {
         std::vector<float> buffer;
         int size = 0;
-        int writeIdx = 0;
-        float read1 = 0.0f;
-        float read2 = 0.0f;
+        long long writeCount = 0;
+        double readCount = 0.0;
 
         void prepare(double sr)
         {
-            size = (int)(sr * 0.08);  // 80ms grain buffer
+            size = (int)(sr * 4.0);
             buffer.assign(size, 0.0f);
-            writeIdx = 0;
-            read1 = 0.0f;
-            read2 = size * 0.5f;
+            writeCount = 0;
+            readCount = 0.0; // no baseline gap
         }
 
         float process(float in, float ratio)
         {
-            buffer[writeIdx] = in;
+            buffer[(int)(writeCount % size)] = in;
 
-            auto interp = [&](float pos) {
-                while (pos < 0) pos += size;
-                while (pos >= size) pos -= size;
-                int i = (int)pos;
-                float f = pos - (float)i;
-                int j = (i + 1) % size;
-                return buffer[i] * (1.0f - f) + buffer[j] * f;
-            };
+            double maxRead = (double)writeCount - 1.0;
+            double minRead = (double)writeCount - (double)(size - 2);
+            if (readCount > maxRead) readCount = maxRead;
+            if (readCount < minRead) readCount = minRead;
 
-            auto dist = [&](float pos) {
-                float d = (float)writeIdx - pos;
-                while (d < 0) d += size;
-                while (d >= size) d -= size;
-                return d;
-            };
+            long long i = (long long)std::floor(readCount);
+            float f = (float)(readCount - (double)i);
+            int idx0 = (int)(((i % size) + size) % size);
+            int idx1 = (int)((((i + 1) % size) + size) % size);
+            float out = buffer[idx0] * (1.0f - f) + buffer[idx1] * f;
 
-            auto fade = [&](float d) {
-                float phase = d / (float)size * juce::MathConstants<float>::pi;
-                return std::sin(phase);
-            };
-
-            float s1 = interp(read1) * fade(dist(read1));
-            float s2 = interp(read2) * fade(dist(read2));
-
-            read1 += ratio;
-            read2 += ratio;
-            while (read1 >= size) read1 -= size;
-            while (read2 >= size) read2 -= size;
-            while (read1 < 0) read1 += size;
-            while (read2 < 0) read2 += size;
-
-            writeIdx = (writeIdx + 1) % size;
-            return s1 + s2;
+            readCount += ratio;
+            ++writeCount;
+            return out;
         }
 
-        void resync() {} // no-op; kept for API compatibility
+        // For bypass decision: how far behind live is the read head?
+        double currentGap() const noexcept
+        {
+            return (double)writeCount - 1.0 - readCount;
+        }
+
+        // Keep writing input so the buffer stays fresh during bypass,
+        // without consuming the read pointer.
+        void writeOnly(float in)
+        {
+            buffer[(int)(writeCount % size)] = in;
+            readCount = (double)writeCount; // keep gap at zero
+            ++writeCount;
+        }
+
+        void resync()
+        {
+            readCount = (double)writeCount - 1.0;
+        }
     };
 
-    std::array<PitchShifter, 2> shifters;
+    std::array<Varispeed, 2> shifters;
 
     float wowPhase = 0.0f;
     float flutterPhase = 0.0f;
