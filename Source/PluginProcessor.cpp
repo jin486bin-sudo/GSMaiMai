@@ -1,0 +1,171 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+TapePluginProcessor::TapePluginProcessor()
+    : AudioProcessor(BusesProperties()
+        .withInput("Input", juce::AudioChannelSet::stereo(), true)
+        .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+      apvts(*this, nullptr, "PARAMS", createParameterLayout())
+{
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout TapePluginProcessor::createParameterLayout()
+{
+    using P = juce::AudioParameterFloat;
+    using R = juce::NormalisableRange<float>;
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    // Master: -1 full slow, 0 normal, +1 full fast. Everything derives from this.
+    params.push_back(std::make_unique<P>("speed", "Speed", R(-1.0f, 1.0f, 0.001f), 0.0f));
+    params.push_back(std::make_unique<P>("mix",   "Mix",   R(0.0f, 1.0f, 0.001f), 1.0f));
+
+    return { params.begin(), params.end() };
+}
+
+void TapePluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
+{
+    currentSampleRate = sampleRate;
+    for (auto& s : shifters) s.prepare(sampleRate);
+
+    juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32)samplesPerBlock, 2 };
+    lowpass.prepare(spec);
+    lowpass.setType(juce::dsp::StateVariableTPTFilterType::lowpass);
+    highpass.prepare(spec);
+    highpass.setType(juce::dsp::StateVariableTPTFilterType::highpass);
+    highpass.setCutoffFrequency(40.0f);
+
+    speedSmooth.reset(sampleRate, 0.2); // 200ms glide — natural tape start/stop
+    speedSmooth.setCurrentAndTargetValue(0.0f);
+
+    wowPhase = flutterPhase = 0.0f;
+}
+
+bool TapePluginProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
+{
+    auto out = layouts.getMainOutputChannelSet();
+    if (out != juce::AudioChannelSet::mono() && out != juce::AudioChannelSet::stereo())
+        return false;
+    return layouts.getMainInputChannelSet() == out;
+}
+
+void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    juce::ScopedNoDenormals noDenormals;
+    const int numCh = buffer.getNumChannels();
+    const int numSamples = buffer.getNumSamples();
+    const float sr = (float)currentSampleRate;
+
+    speedSmooth.setTargetValue(*apvts.getRawParameterValue("speed"));
+    const float mix = *apvts.getRawParameterValue("mix");
+
+    for (int n = 0; n < numSamples; ++n)
+    {
+        float speed = speedSmooth.getNextValue();    // -1..+1
+        float absSpeed = std::abs(speed);
+        float ratio = std::pow(2.0f, speed);         // 0.5x .. 2.0x
+
+        float slowAmt = juce::jmax(0.0f, -speed);
+        float fastAmt = juce::jmax(0.0f,  speed);
+
+        // Tape character ONLY active when speed is non-zero.
+        // All modulation scales from absSpeed → zero when neutral = true bypass.
+        float wowDepth  = 0.025f * absSpeed;
+        float flutDepth = 0.010f * absSpeed;
+
+        // Advance LFO phases only when active (avoids "pre-charged" state)
+        if (absSpeed > 1e-4f)
+        {
+            wowPhase     += juce::MathConstants<float>::twoPi * 0.8f / sr;
+            flutterPhase += juce::MathConstants<float>::twoPi * 7.0f / sr;
+            if (wowPhase     > juce::MathConstants<float>::twoPi) wowPhase     -= juce::MathConstants<float>::twoPi;
+            if (flutterPhase > juce::MathConstants<float>::twoPi) flutterPhase -= juce::MathConstants<float>::twoPi;
+        }
+        else
+        {
+            wowPhase = flutterPhase = 0.0f; // reset so next activation starts clean
+        }
+
+        float wobble = 1.0f + wowDepth  * std::sin(wowPhase)
+                            + flutDepth * std::sin(flutterPhase);
+        float finalRatio = ratio * wobble;
+
+        float satAmt    = 0.7f * slowAmt + 0.15f * fastAmt;
+        float driveGain = 1.0f + 2.0f * slowAmt + 0.3f * fastAmt;
+
+        // Slow = dark tape (lowpass closes). Neutral = fully open.
+        float lpHz = 18000.0f * std::pow(0.12f, slowAmt);
+        lpHz = juce::jlimit(1800.0f, 20000.0f, lpHz);
+        lowpass.setCutoffFrequency(lpHz);
+
+        float hissAmt = 0.02f * slowAmt;
+
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            auto* data = buffer.getWritePointer(ch);
+            float dry = data[n];
+
+            float shifted = shifters[ch].process(dry, finalRatio);
+
+            // Bypass all color when at neutral — exact passthrough through varispeed only
+            float wet;
+            if (absSpeed > 1e-4f)
+            {
+                float driven = shifted * driveGain;
+                float sat = std::tanh(driven) - 0.1f * satAmt * driven * driven;
+                float hiss = (rng.nextFloat() * 2.0f - 1.0f) * hissAmt;
+                wet = sat + hiss;
+
+                float y = wet - dcX1[ch] + 0.995f * dcY1[ch];
+                dcX1[ch] = wet;
+                dcY1[ch] = y;
+                wet = y;
+            }
+            else
+            {
+                wet = shifted;
+                dcX1[ch] = dcY1[ch] = 0.0f; // reset DC state
+            }
+
+            data[n] = dry * (1.0f - mix) + wet * mix;
+        }
+    }
+
+    // Bandwidth filters only when tape is engaged
+    float currentSpeed = *apvts.getRawParameterValue("speed");
+    if (std::abs(currentSpeed) > 1e-4f)
+    {
+        juce::dsp::AudioBlock<float> block(buffer);
+        juce::dsp::ProcessContextReplacing<float> ctx(block);
+        highpass.process(ctx);
+        lowpass.process(ctx);
+    }
+    else
+    {
+        highpass.reset();
+        lowpass.reset();
+    }
+}
+
+juce::AudioProcessorEditor* TapePluginProcessor::createEditor()
+{
+    return new TapePluginEditor(*this);
+}
+
+void TapePluginProcessor::getStateInformation(juce::MemoryBlock& destData)
+{
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml(state.createXml());
+    copyXmlToBinary(*xml, destData);
+}
+
+void TapePluginProcessor::setStateInformation(const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(data, sizeInBytes));
+    if (xml && xml->hasTagName(apvts.state.getType()))
+        apvts.replaceState(juce::ValueTree::fromXml(*xml));
+}
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new TapePluginProcessor();
+}

@@ -1,0 +1,8 @@
+build/
+build_win/
+JUCE/
+.DS_Store
+*.dmg
+*.zip
+installer/GSMaiMai.vst3/
+installer/GSMaiMai.component/
