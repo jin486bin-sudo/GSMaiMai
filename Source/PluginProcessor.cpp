@@ -62,14 +62,7 @@ void TapePluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     highpass.setCutoffFrequency(40.0f);
 
     speedCurrent = 0.0f;
-
-    // Speed delay buffer: same size as varispeed audio buffer
-    speedBufferSize = (int)(sampleRate * 4.0);
-    speedBuffer.assign(speedBufferSize, 0.0f);
-
-    // Report baseline latency (500ms) so host can PDC-compensate
-    setLatencySamples((int)(sampleRate * 0.5));
-
+    setLatencySamples(0); // pitch-shifter path = zero latency
     wowPhase = flutterPhase = 0.0f;
 }
 
@@ -96,20 +89,10 @@ void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
     for (int n = 0; n < numSamples; ++n)
     {
-        // Snappy linear approach to target
+        // Snappy linear approach to target (rate-limited, not time-limited)
         if (target > speedCurrent)      speedCurrent = std::min(target, speedCurrent + maxDelta);
         else if (target < speedCurrent) speedCurrent = std::max(target, speedCurrent - maxDelta);
-
-        // Write current speed into ring at the write head (same geometry as audio buffer).
-        // Read the speed back at the audio-read head position → automation stays sample-
-        // aligned with the audio being produced, despite the 500ms baseline gap.
-        long long wc = shifters[0].writeCount;
-        speedBuffer[(int)(wc % speedBufferSize)] = speedCurrent;
-
-        double rp = shifters[0].readCount;
-        long long ri = (long long)std::floor(rp);
-        int readIdx = (int)(((ri % speedBufferSize) + speedBufferSize) % speedBufferSize);
-        float speed = speedBuffer[readIdx];    // -1..+1, delayed to match audio
+        float speed = speedCurrent;    // -1..+1, applied to current sample immediately
         float absSpeed = std::abs(speed);
         float ratio = std::pow(2.0f, speed);         // 0.5x .. 2.0x
 
