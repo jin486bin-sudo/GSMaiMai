@@ -34,8 +34,10 @@ void TapePluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     highpass.setType(juce::dsp::StateVariableTPTFilterType::highpass);
     highpass.setCutoffFrequency(40.0f);
 
-    speedSmooth.reset(sampleRate, 0.2); // 200ms glide — natural tape start/stop
-    speedSmooth.setCurrentAndTargetValue(0.0f);
+    speedCurrent = 0.0f;
+
+    // Report baseline latency (500ms) so host can PDC-compensate
+    setLatencySamples((int)(sampleRate * 0.5));
 
     wowPhase = flutterPhase = 0.0f;
 }
@@ -55,12 +57,18 @@ void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     const int numSamples = buffer.getNumSamples();
     const float sr = (float)currentSampleRate;
 
-    speedSmooth.setTargetValue(*apvts.getRawParameterValue("speed"));
+    const float target = *apvts.getRawParameterValue("speed");
     const float mix = *apvts.getRawParameterValue("mix");
+
+    // Rate-limited smoothing: small steps feel instant, full jumps glide over 100ms
+    const float maxDelta = speedRatePerSecond / sr;
 
     for (int n = 0; n < numSamples; ++n)
     {
-        float speed = speedSmooth.getNextValue();    // -1..+1
+        // Snappy linear approach to target
+        if (target > speedCurrent)      speedCurrent = std::min(target, speedCurrent + maxDelta);
+        else if (target < speedCurrent) speedCurrent = std::max(target, speedCurrent - maxDelta);
+        float speed = speedCurrent;    // -1..+1
         float absSpeed = std::abs(speed);
         float ratio = std::pow(2.0f, speed);         // 0.5x .. 2.0x
 

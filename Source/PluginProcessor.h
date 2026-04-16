@@ -37,21 +37,23 @@ private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     // True varispeed: pitch AND tempo coupled like real tape.
-    // Read pointer advances at `ratio` per output sample; gap from write head
-    // = playback delay. Slow → delay grows, audio stretches in time.
+    // Read pointer lags write by baselineGap samples → FAST has runway to eat into.
+    // Host PDC compensates for this baseline latency automatically.
     struct Varispeed
     {
         std::vector<float> buffer;
         int size = 0;
+        int baselineGap = 0;
         long long writeCount = 0;
         double readCount = 0.0;
 
         void prepare(double sr)
         {
-            size = (int)(sr * 4.0); // 4-second capture buffer
+            size = (int)(sr * 4.0);              // 4-second capture buffer
+            baselineGap = (int)(sr * 0.5);        // 500ms lead → ~1s of 2x fast runway
             buffer.assign(size, 0.0f);
             writeCount = 0;
-            readCount = 0.0;
+            readCount = -(double)baselineGap;    // start with baseline gap
         }
 
         float process(float in, float ratio)
@@ -75,10 +77,10 @@ private:
             return out;
         }
 
-        // Catch up to "live" (writeCount - 1). Used when STOP pressed.
+        // Snap back to baseline lead. Used when STOP pressed.
         void resync()
         {
-            readCount = (double)writeCount - 1.0;
+            readCount = (double)writeCount - (double)baselineGap;
         }
     };
 
@@ -93,7 +95,10 @@ private:
     std::array<float, 2> dcX1 { 0.0f, 0.0f };
     std::array<float, 2> dcY1 { 0.0f, 0.0f };
 
-    juce::SmoothedValue<float> speedSmooth;
+    // Rate-limited smoothing: full-range jumps glide (whoosh), small steps are snappy
+    float speedCurrent = 0.0f;
+    float speedRatePerSecond = 20.0f; // units/sec; full ±1 jump = 100ms glide
+
     juce::Random rng;
 
 public:
