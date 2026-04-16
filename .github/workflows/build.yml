@@ -47,11 +47,12 @@ jobs:
           xcopy "build\GSMaiMai_artefacts\Release\VST3\GSMaiMai.vst3" "dist\GSMaiMai.vst3\" /e /i /y
           copy install_windows.bat dist\
           copy uninstall_windows.bat dist\
+          powershell Compress-Archive -Path dist\* -DestinationPath GSMaiMai-Windows.zip
         shell: cmd
       - uses: actions/upload-artifact@v4
         with:
           name: GSMaiMai-Windows
-          path: dist/
+          path: GSMaiMai-Windows.zip
 
   release:
     needs: [build-macos, build-windows]
@@ -66,4 +67,4 @@ jobs:
         with:
           files: |
             GSMaiMai-macOS/GSMaiMai-macOS.dmg
-            GSMaiMai-Windows/*
+            GSMaiMai-Windows/GSMaiMai-Windows.zip
