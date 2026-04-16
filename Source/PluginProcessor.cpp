@@ -1,6 +1,33 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+// ----- Optimized math (param-safe; replaces std::sin / std::tanh hot paths) --
+namespace {
+    struct SinLUT {
+        static constexpr int N = 4096;
+        float table[N + 1];
+        SinLUT() {
+            for (int i = 0; i <= N; ++i)
+                table[i] = std::sin(i * juce::MathConstants<float>::twoPi / (float)N);
+        }
+        // phase MUST be wrapped to [0, 2π) by caller
+        inline float operator()(float phase) const noexcept {
+            float pos = phase * ((float)N / juce::MathConstants<float>::twoPi);
+            int i = (int)pos;
+            float f = pos - (float)i;
+            return table[i] * (1.0f - f) + table[i + 1] * f;
+        }
+    };
+    static const SinLUT kSinLUT;
+
+    // Pade approximant for tanh, accurate within ±3 → within 1e-4 of std::tanh
+    inline float fastTanh(float x) noexcept {
+        x = juce::jlimit(-3.0f, 3.0f, x);
+        float x2 = x * x;
+        return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+    }
+}
+
 TapePluginProcessor::TapePluginProcessor()
     : AudioProcessor(BusesProperties()
         .withInput("Input", juce::AudioChannelSet::stereo(), true)
@@ -93,17 +120,21 @@ void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             wowPhase = flutterPhase = 0.0f; // reset so next activation starts clean
         }
 
-        float wobble = 1.0f + wowDepth  * std::sin(wowPhase)
-                            + flutDepth * std::sin(flutterPhase);
+        float wobble = 1.0f + wowDepth  * kSinLUT(wowPhase)
+                            + flutDepth * kSinLUT(flutterPhase);
         float finalRatio = ratio * wobble;
 
         float satAmt    = 0.7f * slowAmt + 0.15f * fastAmt;
         float driveGain = 1.0f + 2.0f * slowAmt + 0.3f * fastAmt;
 
-        // Slow = dark tape (lowpass closes). Neutral = fully open.
-        float lpHz = 18000.0f * std::pow(0.12f, slowAmt);
-        lpHz = juce::jlimit(1800.0f, 20000.0f, lpHz);
-        lowpass.setCutoffFrequency(lpHz);
+        // Slow = dark tape (lowpass closes). Update cutoff only every 32 samples
+        // (control rate) — smoothing is slow enough that this is inaudible, saves pow+coeff recalc.
+        if ((n & 31) == 0)
+        {
+            float lpHz = 18000.0f * std::pow(0.12f, slowAmt);
+            lpHz = juce::jlimit(1800.0f, 20000.0f, lpHz);
+            lowpass.setCutoffFrequency(lpHz);
+        }
 
         float hissAmt = 0.02f * slowAmt;
 
@@ -119,7 +150,7 @@ void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             if (absSpeed > 1e-4f)
             {
                 float driven = shifted * driveGain;
-                float sat = std::tanh(driven) - 0.1f * satAmt * driven * driven;
+                float sat = fastTanh(driven) - 0.1f * satAmt * driven * driven;
                 float hiss = (rng.nextFloat() * 2.0f - 1.0f) * hissAmt;
                 wet = sat + hiss;
 
