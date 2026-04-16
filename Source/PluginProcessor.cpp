@@ -63,6 +63,10 @@ void TapePluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     speedCurrent = 0.0f;
 
+    // Speed delay buffer: same size as varispeed audio buffer
+    speedBufferSize = (int)(sampleRate * 4.0);
+    speedBuffer.assign(speedBufferSize, 0.0f);
+
     // Report baseline latency (500ms) so host can PDC-compensate
     setLatencySamples((int)(sampleRate * 0.5));
 
@@ -95,7 +99,17 @@ void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         // Snappy linear approach to target
         if (target > speedCurrent)      speedCurrent = std::min(target, speedCurrent + maxDelta);
         else if (target < speedCurrent) speedCurrent = std::max(target, speedCurrent - maxDelta);
-        float speed = speedCurrent;    // -1..+1
+
+        // Write current speed into ring at the write head (same geometry as audio buffer).
+        // Read the speed back at the audio-read head position → automation stays sample-
+        // aligned with the audio being produced, despite the 500ms baseline gap.
+        long long wc = shifters[0].writeCount;
+        speedBuffer[(int)(wc % speedBufferSize)] = speedCurrent;
+
+        double rp = shifters[0].readCount;
+        long long ri = (long long)std::floor(rp);
+        int readIdx = (int)(((ri % speedBufferSize) + speedBufferSize) % speedBufferSize);
+        float speed = speedBuffer[readIdx];    // -1..+1, delayed to match audio
         float absSpeed = std::abs(speed);
         float ratio = std::pow(2.0f, speed);         // 0.5x .. 2.0x
 

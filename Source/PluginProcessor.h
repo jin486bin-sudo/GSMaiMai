@@ -99,6 +99,11 @@ private:
     float speedCurrent = 0.0f;
     float speedRatePerSecond = 20.0f; // units/sec; full ±1 jump = 100ms glide
 
+    // Parallel delay buffer for the speed parameter — keeps audio & automation
+    // aligned despite the baseline gap. Same geometry as Varispeed buffer.
+    std::vector<float> speedBuffer;
+    int speedBufferSize = 0;
+
     juce::Random rng;
 
 public:
