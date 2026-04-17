@@ -116,13 +116,6 @@ private:
 
 public:
     void resyncTape() { for (auto& s : shifters) s.resync(); }
-    bool isEffectExhausted() const
-    {
-        float spd = *apvts.getRawParameterValue("speed");
-        if (spd > 0.01f  && shifters[0].currentGap() < 2.0)  return true;  // FAST caught up
-        if (spd < -0.01f && shifters[0].currentGap() > (double)(shifters[0].size - 100)) return true; // SLOW filled buffer
-        return false;
-    }
 
 private:
     double currentSampleRate = 44100.0;

@@ -20,13 +20,10 @@ private:
 
     TapePluginProcessor& proc;
 
-    juce::Rectangle<int> maxSlowBtn, stepDownBtn, stopBtn, stepUpBtn, maxFastBtn;
-    int pressedBtn = -1; // 0=maxSlow 1=stepDown 2=stop 3=stepUp 4=maxFast
-
+    juce::Rectangle<int> minBtn, stepDownBtn, stopBtn, stepUpBtn;
+    int pressedBtn = -1; // 0=min 1=stepDown 2=stop 3=stepUp
     float reelPhase = 0.0f;
-
-    // Hold-to-repeat for +/- step buttons
-    int holdFrames = 0; // counts timer ticks while button held
+    int holdFrames = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TapePluginEditor)
 };
