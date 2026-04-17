@@ -91,8 +91,7 @@ void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         // skip all DSP and just keep the buffer fresh. Handles mid-block
         // automation transitions sample-accurately.
         bool neutral = std::abs(target) < 1e-4f
-                     && std::abs(speedCurrent) < 1e-4f
-                     && shifters[0].currentGap() < 2.0;
+                     && std::abs(speedCurrent) < 1e-4f;
 
         if (neutral)
         {
