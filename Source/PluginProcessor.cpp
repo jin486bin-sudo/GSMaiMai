@@ -83,36 +83,33 @@ void TapePluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
     const float target = *apvts.getRawParameterValue("speed");
     const float mix = *apvts.getRawParameterValue("mix");
-
-    // FAST PATH: true bypass when fully neutral and no accumulated tape delay.
-    // No DSP runs except keeping the audio buffer fresh for instant engagement.
-    const bool fullyNeutral = std::abs(target) < 1e-4f
-                           && std::abs(speedCurrent) < 1e-4f
-                           && shifters[0].currentGap() < 2.0;
-
-    if (fullyNeutral)
-    {
-        for (int n = 0; n < numSamples; ++n)
-            for (int ch = 0; ch < numCh; ++ch)
-                shifters[ch].writeOnly(buffer.getSample(ch, n));
-
-        highpass.reset();
-        lowpass.reset();
-        wowPhase = flutterPhase = 0.0f;
-        for (auto& v : dcX1) v = 0.0f;
-        for (auto& v : dcY1) v = 0.0f;
-        return; // audio passes through unchanged
-    }
-
-    // Rate-limited smoothing: small steps feel instant, full jumps glide over 100ms
     const float maxDelta = speedRatePerSecond / sr;
 
     for (int n = 0; n < numSamples; ++n)
     {
-        // Snappy linear approach to target (rate-limited, not time-limited)
+        // PER-SAMPLE bypass: when truly neutral with no accumulated delay,
+        // skip all DSP and just keep the buffer fresh. Handles mid-block
+        // automation transitions sample-accurately.
+        bool neutral = std::abs(target) < 1e-4f
+                     && std::abs(speedCurrent) < 1e-4f
+                     && shifters[0].currentGap() < 2.0;
+
+        if (neutral)
+        {
+            for (int ch = 0; ch < numCh; ++ch)
+                shifters[ch].writeOnly(buffer.getSample(ch, n));
+            continue;
+        }
+
+        // INSTANT SNAP when engaging from neutral → no smoothing delay on onset.
+        // Smoothing only applies for value-to-value transitions while active.
+        if (std::abs(speedCurrent) < 1e-4f && std::abs(target) > 1e-4f)
+            speedCurrent = target;
+
+        // Rate-limited smoothing for transitions between non-zero values
         if (target > speedCurrent)      speedCurrent = std::min(target, speedCurrent + maxDelta);
         else if (target < speedCurrent) speedCurrent = std::max(target, speedCurrent - maxDelta);
-        float speed = speedCurrent;    // -1..+1, applied to current sample immediately
+        float speed = speedCurrent;
         float absSpeed = std::abs(speed);
         float ratio = std::pow(2.0f, speed);         // 0.5x .. 2.0x
 
