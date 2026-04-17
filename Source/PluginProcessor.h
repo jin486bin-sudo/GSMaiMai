@@ -50,7 +50,7 @@ private:
 
         void prepare(double sr)
         {
-            size = (int)(sr * 4.0);
+            size = (int)(sr * 30.0); // 30-second buffer: MAX SLOW lasts ~60 sec
             buffer.assign(size, 0.0f);
             writeCount = 0;
             readCount = 0.0; // no baseline gap
@@ -116,6 +116,13 @@ private:
 
 public:
     void resyncTape() { for (auto& s : shifters) s.resync(); }
+    bool isEffectExhausted() const
+    {
+        float spd = *apvts.getRawParameterValue("speed");
+        if (spd > 0.01f  && shifters[0].currentGap() < 2.0)  return true;  // FAST caught up
+        if (spd < -0.01f && shifters[0].currentGap() > (double)(shifters[0].size - 100)) return true; // SLOW filled buffer
+        return false;
+    }
 
 private:
     double currentSampleRate = 44100.0;

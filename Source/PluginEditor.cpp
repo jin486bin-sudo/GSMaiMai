@@ -45,9 +45,9 @@ void TapePluginEditor::applyStep(int delta)
 {
     auto* param = proc.apvts.getParameter("speed");
     float cur = *proc.apvts.getRawParameterValue("speed");
-    const float stepSize = 1.0f / 100.0f;
+    const float stepSize = 1.0f / 24.0f;
     int curStep = (int)std::round(cur / stepSize);
-    int newStep = juce::jlimit(-100, 100, curStep + delta);
+    int newStep = juce::jlimit(-24, 24, curStep + delta);
     float newVal = newStep * stepSize;
     param->beginChangeGesture();
     param->setValueNotifyingHost(param->convertTo0to1(newVal));
@@ -58,7 +58,7 @@ void TapePluginEditor::mouseDown(const juce::MouseEvent& e)
 {
     auto pos = e.getPosition();
     holdFrames = 0;
-    if (maxSlowBtn.contains(pos))       { pressedBtn = 0; applyStep(-200); }
+    if (maxSlowBtn.contains(pos))       { pressedBtn = 0; applyStep(-48); }
     else if (stepDownBtn.contains(pos)) { pressedBtn = 1; applyStep(-1); }
     else if (stopBtn.contains(pos))     {
         pressedBtn = 2;
@@ -69,7 +69,7 @@ void TapePluginEditor::mouseDown(const juce::MouseEvent& e)
         proc.resyncTape();
     }
     else if (stepUpBtn.contains(pos))   { pressedBtn = 3; applyStep(+1); }
-    else if (maxFastBtn.contains(pos))  { pressedBtn = 4; applyStep(+200); }
+    else if (maxFastBtn.contains(pos))  { pressedBtn = 4; applyStep(+48); }
     repaint();
 }
 
@@ -192,7 +192,7 @@ void TapePluginEditor::paint(juce::Graphics& g)
     g.fillRoundedRectangle(lcd, 6.0f);
 
     float speed = *proc.apvts.getRawParameterValue("speed");
-    int step = (int)std::round(speed * 100.0f);
+    int step = proc.isEffectExhausted() ? 0 : (int)std::round(speed * 24.0f);
     juce::String disp = (step > 0 ? "+" : "") + juce::String(step);
 
     g.setColour(kPaper);
@@ -208,9 +208,9 @@ void TapePluginEditor::paint(juce::Graphics& g)
     g.setColour(kMid);
     g.setFont(juce::Font(juce::Font::getDefaultSansSerifFontName(), 9.0f, juce::Font::plain));
     auto scale = juce::Rectangle<float>(40, 258, (float)getWidth() - 80, 14);
-    g.drawText("-100", scale.toNearestInt(), juce::Justification::centredLeft);
-    g.drawText("0",    scale.toNearestInt(), juce::Justification::centred);
-    g.drawText("+100", scale.toNearestInt(), juce::Justification::centredRight);
+    g.drawText("-24", scale.toNearestInt(), juce::Justification::centredLeft);
+    g.drawText("0",   scale.toNearestInt(), juce::Justification::centred);
+    g.drawText("+24", scale.toNearestInt(), juce::Justification::centredRight);
 
     // Buttons (center STOP uses filled variant)
     drawBtn(g, maxSlowBtn,  juce::String::fromUTF8("\xe2\x97\x80\xe2\x97\x80"), pressedBtn == 0, false);
